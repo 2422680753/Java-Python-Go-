@@ -1,0 +1,60 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'transaction-gateway'
+    scrape_interval: 5s
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['transaction-gateway-1:8080', 'transaction-gateway-2:8080']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: 'rules-engine'
+    scrape_interval: 5s
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['rules-engine-1:8081', 'rules-engine-2:8081']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: 'realtime-decision'
+    scrape_interval: 5s
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['realtime-decision:8082']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: 'kafka'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['kafka-1:9092', 'kafka-2:9092']
+    metrics_path: '/metrics'
+
+  - job_name: 'nginx'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['nginx-lb:80']
+    metrics_path: '/nginx_status'
+
+  - job_name: 'redis'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['redis-primary:6379', 'redis-replica:6379']
+    metrics_path: '/metrics'
