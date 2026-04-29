@@ -1,0 +1,199 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: risk-control-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - risk-control-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: risk-control-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    networks:
+      - risk-control-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: risk-control-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - risk-control-network
+
+  transaction-gateway:
+    build:
+      context: ../java-service
+      dockerfile: Dockerfile-gateway
+    container_name: risk-control-gateway
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+    ports:
+      - "8080:8080"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  rules-engine:
+    build:
+      context: ../java-service
+      dockerfile: Dockerfile-rules
+    container_name: risk-control-rules
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+    ports:
+      - "8081:8081"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  realtime-decision:
+    build:
+      context: ../java-service
+      dockerfile: Dockerfile-decision
+    container_name: risk-control-decision
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+    ports:
+      - "8082:8082"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  ml-risk-assessment:
+    build:
+      context: ../python-service
+      dockerfile: Dockerfile
+    container_name: risk-control-ml
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "8083:8083"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  data-processing:
+    build:
+      context: ../go-service
+      dockerfile: Dockerfile-data
+    container_name: risk-control-data
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8084:8084"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  stream-processing:
+    build:
+      context: ../go-service
+      dockerfile: Dockerfile-stream
+    container_name: risk-control-stream
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8085:8085"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  cache-management:
+    build:
+      context: ../go-service
+      dockerfile: Dockerfile-cache
+    container_name: risk-control-cache
+    depends_on:
+      - redis
+    environment:
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8086:8086"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: risk-control-kafka-ui
+    depends_on:
+      - kafka
+      - zookeeper
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    ports:
+      - "8088:8080"
+    networks:
+      - risk-control-network
+
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    container_name: risk-control-redis-insight
+    depends_on:
+      - redis
+    ports:
+      - "8001:8001"
+    networks:
+      - risk-control-network
+
+networks:
+  risk-control-network:
+    driver: bridge
+
+volumes:
+  redis-data:

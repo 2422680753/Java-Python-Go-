@@ -1,0 +1,121 @@
+package com.riskcontrol.rules
+
+import com.riskcontrol.rules.model.TransactionFact
+import java.math.BigDecimal
+
+global java.util.Map riskFactors
+
+rule "大额交易风险"
+    salience 100
+    when
+        $fact: TransactionFact(amount > new BigDecimal("100000"))
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.3);
+        $fact.setRuleReason("大额交易: 金额超过10万");
+        $fact.setRuleDecision("REVIEW");
+end
+
+rule "新用户首次交易风险"
+    salience 90
+    when
+        $fact: TransactionFact(isNewUser == true, userTransactionCount == 0)
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.2);
+        $fact.setRuleReason("新用户首次交易");
+        if ($fact.getRuleDecision() == null) {
+            $fact.setRuleDecision("REVIEW");
+        }
+end
+
+rule "新设备交易风险"
+    salience 80
+    when
+        $fact: TransactionFact(isNewDevice == true)
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.15);
+        $fact.setRuleReason("新设备登录交易");
+        if ($fact.getRuleDecision() == null) {
+            $fact.setRuleDecision("REVIEW");
+        }
+end
+
+rule "新位置交易风险"
+    salience 80
+    when
+        $fact: TransactionFact(isNewLocation == true)
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.15);
+        $fact.setRuleReason("新地理位置交易");
+        if ($fact.getRuleDecision() == null) {
+            $fact.setRuleDecision("REVIEW");
+        }
+end
+
+rule "登录失败多次风险"
+    salience 95
+    when
+        $fact: TransactionFact(userLoginFailures >= 3)
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.4);
+        $fact.setRuleReason("登录失败3次以上，存在账户被盗风险");
+        $fact.setRuleDecision("REJECT");
+end
+
+rule "单日累计金额过高风险"
+    salience 85
+    when
+        $fact: TransactionFact(userDailyAmount > new BigDecimal("500000"))
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.25);
+        $fact.setRuleReason("单日累计交易金额超过50万");
+        if ($fact.getRuleDecision() == null) {
+            $fact.setRuleDecision("REVIEW");
+        }
+end
+
+rule "高风险国家交易"
+    salience 95
+    when
+        $fact: TransactionFact(isHighRiskCountry == true)
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.5);
+        $fact.setRuleReason("交易来自高风险国家/地区");
+        $fact.setRuleDecision("REJECT");
+end
+
+rule "可疑收款方交易"
+    salience 90
+    when
+        $fact: TransactionFact(isSuspiciousRecipient == true)
+    then
+        $fact.setRuleRiskScore($fact.getRuleRiskScore() + 0.4);
+        $fact.setRuleReason("收款方为可疑账户");
+        $fact.setRuleDecision("REJECT");
+end
+
+rule "综合风险评估 - 高风险"
+    salience 50
+    when
+        $fact: TransactionFact(ruleRiskScore >= 0.7, ruleDecision == null || ruleDecision == "REVIEW")
+    then
+        $fact.setRuleDecision("REJECT");
+        $fact.setRuleReason("综合风险评分过高，交易被拒绝");
+end
+
+rule "综合风险评估 - 低风险"
+    salience 50
+    when
+        $fact: TransactionFact(ruleRiskScore < 0.3, ruleDecision == null)
+    then
+        $fact.setRuleDecision("APPROVE");
+        $fact.setRuleReason("低风险交易，自动通过");
+end
+
+rule "默认决策"
+    salience 1
+    when
+        $fact: TransactionFact(ruleDecision == null)
+    then
+        $fact.setRuleDecision("REVIEW");
+        $fact.setRuleReason("需要人工审核");
+end

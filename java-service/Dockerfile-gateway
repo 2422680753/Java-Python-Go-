@@ -1,0 +1,30 @@
+FROM maven:3.9-eclipse-temurin-17 AS build
+
+WORKDIR /app
+
+COPY pom.xml .
+COPY transaction-gateway/pom.xml ./transaction-gateway/
+
+RUN mvn dependency:go-offline -B
+
+COPY transaction-gateway/src ./transaction-gateway/src
+
+RUN mvn clean package -DskipTests -pl transaction-gateway -am
+
+FROM eclipse-temurin:17-jre-alpine
+
+WORKDIR /app
+
+RUN addgroup -S riskcontrol && adduser -S riskcontrol -G riskcontrol
+
+COPY --from=build /app/transaction-gateway/target/*.jar app.jar
+
+RUN chown -R riskcontrol:riskcontrol /app
+
+USER riskcontrol
+
+EXPOSE 8080
+
+ENV JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC"
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
