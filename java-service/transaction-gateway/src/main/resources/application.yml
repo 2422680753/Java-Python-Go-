@@ -14,6 +14,9 @@ spring:
       retries: 3
       batch-size: 16384
       buffer-memory: 33554432
+      properties:
+        linger.ms: 5
+        compression.type: lz4
 
   redis:
     host: localhost
@@ -23,21 +26,79 @@ spring:
     timeout: 10000ms
     lettuce:
       pool:
-        max-active: 8
+        max-active: 32
         max-wait: -1ms
-        max-idle: 8
-        min-idle: 0
+        max-idle: 16
+        min-idle: 8
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      transaction-gateway:
+        register-health-indicator: true
+        sliding-window-type: count_based
+        sliding-window-size: 100
+        minimum-number-of-calls: 20
+        permitted-number-of-calls-in-half-open-state: 10
+        wait-duration-in-open-state: 15s
+        failure-rate-threshold: 40
+        slow-call-rate-threshold: 50
+        slow-call-duration-threshold: 1s
+        automatic-transition-from-open-to-half-open-enabled: true
+        event-consumer-buffer-size: 100
+      kafka-producer:
+        register-health-indicator: true
+        sliding-window-size: 50
+        minimum-number-of-calls: 10
+        wait-duration-in-open-state: 30s
+        failure-rate-threshold: 50
+  
+  ratelimiter:
+    instances:
+      transaction-rate:
+        limit-for-period: 5000
+        limit-refresh-period: 1s
+        timeout-duration: 0s
+        register-health-indicator: true
+      heavy-operation:
+        limit-for-period: 100
+        limit-refresh-period: 1s
+        timeout-duration: 100ms
+  
+  timelimiter:
+    instances:
+      transaction-gateway:
+        timeout-duration: 500ms
+        cancel-running-future: true
+  
+  bulkhead:
+    instances:
+      transaction-service:
+        max-concurrent-calls: 100
+        max-wait-duration: 500ms
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,circuitbreakers,ratelimiters,prometheus
   endpoint:
     health:
       show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 logging:
   level:
     com.riskcontrol: DEBUG
     org.springframework.kafka: INFO
+    io.github.resilience4j: DEBUG
+
+resilience:
+  circuit-breaker:
+    enabled: true
+  rate-limiter:
+    enabled: true
+  retry:
+    enabled: true

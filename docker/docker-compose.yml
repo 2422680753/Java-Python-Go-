@@ -11,74 +11,210 @@ services:
       - "2181:2181"
     networks:
       - risk-control-network
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  kafka:
+  kafka-1:
     image: confluentinc/cp-kafka:7.5.0
-    container_name: risk-control-kafka
+    container_name: risk-control-kafka-1
     depends_on:
       - zookeeper
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092,PLAINTEXT_HOST://localhost:19092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
     ports:
-      - "9092:9092"
-      - "9093:9093"
+      - "19092:19092"
     networks:
       - risk-control-network
+    restart: on-failure
 
-  redis:
+  kafka-2:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: risk-control-kafka-2
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "29092:29092"
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  redis-primary:
     image: redis:7.2-alpine
-    container_name: risk-control-redis
-    command: redis-server --appendonly yes
+    container_name: risk-control-redis-primary
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     volumes:
-      - redis-data:/data
+      - redis-primary-data:/data
     networks:
       - risk-control-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
-  transaction-gateway:
+  redis-replica:
+    image: redis:7.2-alpine
+    container_name: risk-control-redis-replica
+    command: redis-server --slaveof redis-primary 6379 --appendonly yes
+    depends_on:
+      - redis-primary
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-replica-data:/data
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  nginx-lb:
+    image: nginx:alpine
+    container_name: risk-control-nginx-lb
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - transaction-gateway-1
+      - transaction-gateway-2
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  transaction-gateway-1:
     build:
       context: ../java-service
       dockerfile: Dockerfile-gateway
-    container_name: risk-control-gateway
+    container_name: risk-control-gateway-1
     depends_on:
-      - kafka
-      - redis
+      - kafka-1
+      - kafka-2
+      - redis-primary
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SPRING_REDIS_HOST: redis
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
+      SPRING_REDIS_HOST: redis-primary
       SPRING_REDIS_PORT: 6379
-    ports:
-      - "8080:8080"
+      SPRING_KAFKA_PRODUCER_ACKS: "1"
+      SPRING_KAFKA_PRODUCER_RETRIES: "3"
+    expose:
+      - "8080"
     networks:
       - risk-control-network
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
 
-  rules-engine:
+  transaction-gateway-2:
+    build:
+      context: ../java-service
+      dockerfile: Dockerfile-gateway
+    container_name: risk-control-gateway-2
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - redis-primary
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
+      SPRING_REDIS_HOST: redis-primary
+      SPRING_REDIS_PORT: 6379
+      SPRING_KAFKA_PRODUCER_ACKS: "1"
+      SPRING_KAFKA_PRODUCER_RETRIES: "3"
+    expose:
+      - "8080"
+    networks:
+      - risk-control-network
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  rules-engine-1:
     build:
       context: ../java-service
       dockerfile: Dockerfile-rules
-    container_name: risk-control-rules
+    container_name: risk-control-rules-1
     depends_on:
-      - kafka
-      - redis
+      - kafka-1
+      - kafka-2
+      - redis-primary
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SPRING_REDIS_HOST: redis
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
+      SPRING_REDIS_HOST: redis-primary
       SPRING_REDIS_PORT: 6379
-    ports:
-      - "8081:8081"
+    expose:
+      - "8081"
     networks:
       - risk-control-network
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+
+  rules-engine-2:
+    build:
+      context: ../java-service
+      dockerfile: Dockerfile-rules
+    container_name: risk-control-rules-2
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - redis-primary
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
+      SPRING_REDIS_HOST: redis-primary
+      SPRING_REDIS_PORT: 6379
+    expose:
+      - "8081"
+    networks:
+      - risk-control-network
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
 
   realtime-decision:
     build:
@@ -86,18 +222,24 @@ services:
       dockerfile: Dockerfile-decision
     container_name: risk-control-decision
     depends_on:
-      - kafka
-      - redis
+      - kafka-1
+      - kafka-2
+      - redis-primary
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SPRING_REDIS_HOST: redis
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
+      SPRING_REDIS_HOST: redis-primary
       SPRING_REDIS_PORT: 6379
     ports:
       - "8082:8082"
     networks:
       - risk-control-network
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
 
   ml-risk-assessment:
     build:
@@ -105,17 +247,23 @@ services:
       dockerfile: Dockerfile
     container_name: risk-control-ml
     depends_on:
-      - kafka
-      - redis
+      - kafka-1
+      - kafka-2
+      - redis-primary
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
+      REDIS_HOST: redis-primary
       REDIS_PORT: 6379
     ports:
       - "8083:8083"
     networks:
       - risk-control-network
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 2G
 
   data-processing:
     build:
@@ -123,16 +271,22 @@ services:
       dockerfile: Dockerfile-data
     container_name: risk-control-data
     depends_on:
-      - kafka
-      - redis
+      - kafka-1
+      - kafka-2
+      - redis-primary
     environment:
-      KAFKA_BROKERS: kafka:9092
-      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092
+      REDIS_ADDR: redis-primary:6379
     ports:
       - "8084:8084"
     networks:
       - risk-control-network
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 256M
 
   stream-processing:
     build:
@@ -140,16 +294,22 @@ services:
       dockerfile: Dockerfile-stream
     container_name: risk-control-stream
     depends_on:
-      - kafka
-      - redis
+      - kafka-1
+      - kafka-2
+      - redis-primary
     environment:
-      KAFKA_BROKERS: kafka:9092
-      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092
+      REDIS_ADDR: redis-primary:6379
     ports:
       - "8085:8085"
     networks:
       - risk-control-network
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 256M
 
   cache-management:
     build:
@@ -157,24 +317,58 @@ services:
       dockerfile: Dockerfile-cache
     container_name: risk-control-cache
     depends_on:
-      - redis
+      - redis-primary
     environment:
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: redis-primary:6379
     ports:
       - "8086:8086"
     networks:
       - risk-control-network
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 128M
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: risk-control-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - risk-control-network
+    restart: on-failure
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: risk-control-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - risk-control-network
+    restart: on-failure
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: risk-control-kafka-ui
     depends_on:
-      - kafka
+      - kafka-1
+      - kafka-2
       - zookeeper
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092,kafka-2:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
     ports:
       - "8088:8080"
@@ -185,7 +379,7 @@ services:
     image: redislabs/redisinsight:latest
     container_name: risk-control-redis-insight
     depends_on:
-      - redis
+      - redis-primary
     ports:
       - "8001:8001"
     networks:
@@ -194,6 +388,12 @@ services:
 networks:
   risk-control-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
-  redis-data:
+  redis-primary-data:
+  redis-replica-data:
+  prometheus-data:
+  grafana-data:
