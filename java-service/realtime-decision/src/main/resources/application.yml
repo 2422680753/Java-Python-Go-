@@ -12,12 +12,25 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
-      enable-auto-commit: true
-      auto-commit-interval: 1000
+      enable-auto-commit: false
+      max-poll-records: 500
+      fetch-min-bytes: 10240
+      fetch-max-wait: 500
+      session-timeout: 30000
+      heartbeat-interval: 10000
+      max-poll-interval: 300000
+      properties:
+        fetch.max.bytes: 52428800
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       acks: 1
+      retries: 3
+      batch-size: 65536
+      buffer-memory: 33554432
+      properties:
+        linger.ms: 5
+        compression.type: lz4
 
   redis:
     host: localhost
@@ -27,19 +40,27 @@ spring:
     timeout: 10000ms
     lettuce:
       pool:
-        max-active: 8
+        max-active: 32
         max-wait: -1ms
-        max-idle: 8
-        min-idle: 0
+        max-idle: 16
+        min-idle: 8
+
+kafka:
+  consumer:
+    concurrency: 6
+    max-poll-records: 500
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,circuitbreakers,prometheus
   endpoint:
     health:
       show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 logging:
   level:
