@@ -12,12 +12,37 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
-      enable-auto-commit: true
-      auto-commit-interval: 1000
+      enable-auto-commit: false
+      max-poll-records: 500
+      fetch-min-bytes: 10240
+      fetch-max-wait: 500
+      session-timeout: 30000
+      heartbeat-interval: 10000
+      max-poll-interval: 300000
+      properties:
+        fetch.max.bytes: 52428800
+        receive.buffer.bytes: 65536
+        send.buffer.bytes: 131072
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       acks: 1
+      retries: 3
+      batch-size: 65536
+      buffer-memory: 33554432
+      properties:
+        linger.ms: 5
+        compression.type: lz4
+        max.in.flight.requests.per.connection: 5
+
+kafka:
+  consumer:
+    concurrency: 8
+    max-poll-records: 500
+    fetch-min-bytes: 10240
+    fetch-max-wait: 500
+    session-timeout: 30000
+    heartbeat-interval: 10000
 
   redis:
     host: localhost
@@ -32,11 +57,88 @@ spring:
         max-idle: 8
         min-idle: 0
 
+risk:
+  threshold:
+    large-transaction-threshold: 100000
+    very-large-threshold: 500000
+    reject-threshold: 0.8
+    review-threshold: 0.5
+    approve-threshold: 0.25
+    max-transaction-per-hour: 100
+    max-daily-amount: 500000
+    
+    dynamic-weights:
+      amount-factor: 0.25
+      device-factor: 0.15
+      location-factor: 0.15
+      user-history-factor: 0.25
+      time-factor: 0.1
+      login-failure-factor: 0.1
+    
+    levels:
+      LOW:
+        name: LOW
+        min-score: 0.0
+        max-score: 0.25
+        decision: APPROVE
+        description: 低风险，自动通过
+      MEDIUM_LOW:
+        name: MEDIUM_LOW
+        min-score: 0.25
+        max-score: 0.4
+        decision: APPROVE
+        description: 中低风险，自动通过
+      MEDIUM:
+        name: MEDIUM
+        min-score: 0.4
+        max-score: 0.6
+        decision: REVIEW
+        description: 中等风险，需要人工审核
+      MEDIUM_HIGH:
+        name: MEDIUM_HIGH
+        min-score: 0.6
+        max-score: 0.8
+        decision: REVIEW
+        description: 中高风险，需要重点审核
+      HIGH:
+        name: HIGH
+        min-score: 0.8
+        max-score: 1.0
+        decision: REJECT
+        description: 高风险，自动拒绝
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      rules-service:
+        register-health-indicator: true
+        sliding-window-size: 100
+        minimum-number-of-calls: 10
+        permitted-number-of-calls-in-half-open-state: 5
+        wait-duration-in-open-state: 30000
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 60
+        slow-call-duration-threshold: 2s
+        automatic-transition-from-open-to-half-open-enabled: true
+  
+  ratelimiter:
+    instances:
+      transaction-rules:
+        limit-for-period: 1000
+        limit-refresh-period: 1s
+        timeout-duration: 0s
+  
+  timelimiter:
+    instances:
+      rules-evaluation:
+        timeout-duration: 500ms
+        cancel-running-future: true
+
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,circuitbreakers,prometheus
   endpoint:
     health:
       show-details: always
@@ -46,3 +148,4 @@ logging:
     com.riskcontrol: DEBUG
     org.drools: INFO
     org.springframework.kafka: INFO
+    io.github.resilience4j: DEBUG
